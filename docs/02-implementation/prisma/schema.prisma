@@ -1,0 +1,306 @@
+// Hyper-Connect MVP Prisma Schema
+// Version: 2.0
+// Last Updated: 2026-01-19
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum UserRole {
+  BUYER
+  SELLER
+  ADMIN
+}
+
+enum VehicleStatus {
+  DRAFT
+  PENDING
+  APPROVED
+  REJECTED
+  SOLD
+}
+
+enum BrakeDiskStatus {
+  GOOD
+  FAIR
+  NEEDS_REPLACEMENT
+  REPLACED
+}
+
+enum FileType {
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+}
+
+enum InspectionGrade {
+  S
+  A
+  B
+  C
+  D
+}
+
+enum OptionCategory {
+  PERFORMANCE
+  EXTERIOR
+  INTERIOR
+  CONVENIENCE
+}
+
+// ============================================
+// MODELS
+// ============================================
+
+/// 사용자 (판매자/구매자/관리자)
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  passwordHash  String    @map("password_hash")
+  name          String
+  phone         String?
+  role          UserRole  @default(BUYER)
+  emailVerified Boolean   @default(false) @map("email_verified")
+  profileImage  String?   @map("profile_image")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  vehicles          Vehicle[]          @relation("SellerVehicles")
+  approvedVehicles  Vehicle[]          @relation("ApprovedByAdmin")
+  inspectionReports InspectionReport[] @relation("InspectorReports")
+
+  @@index([email])
+  @@index([role])
+  @@map("users")
+}
+
+/// 차량 (F1 핵심)
+model Vehicle {
+  id                 String        @id @default(uuid())
+  sellerId           String        @map("seller_id")
+  manufacturer       String
+  model              String
+  year               Int
+  mileageKm          Int           @map("mileage_km")
+  vin                String        @unique
+  registrationNumber String?       @map("registration_number")
+  matchingNumbers    Boolean       @default(false) @map("matching_numbers")
+  priceKrw           Decimal       @map("price_krw") @db.Decimal(15, 0)
+  descriptionKo      String?       @map("description_ko") @db.Text
+  descriptionEn      String?       @map("description_en") @db.Text
+  status             VehicleStatus @default(DRAFT)
+  viewCount          Int           @default(0) @map("view_count")
+  approvedAt         DateTime?     @map("approved_at")
+  approvedBy         String?       @map("approved_by")
+  rejectionReason    String?       @map("rejection_reason") @db.Text
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  seller             User                @relation("SellerVehicles", fields: [sellerId], references: [id])
+  approver           User?               @relation("ApprovedByAdmin", fields: [approvedBy], references: [id])
+  options            VehicleOption[]
+  maintenanceRecords MaintenanceRecord[]
+  consumableStatus   ConsumableStatus?
+  mediaFiles         MediaFile[]
+  inspectionReport   InspectionReport?
+
+  @@index([sellerId])
+  @@index([status])
+  @@index([createdAt(sort: Desc)])
+  @@index([manufacturer, model])
+  @@index([priceKrw])
+  @@map("vehicles")
+}
+
+/// 옵션 마스터 데이터
+model Option {
+  id           String         @id @default(uuid())
+  manufacturer String
+  category     OptionCategory
+  code         String         @unique
+  nameKo       String         @map("name_ko")
+  nameEn       String         @map("name_en")
+  description  String?        @db.Text
+  isActive     Boolean        @default(true) @map("is_active")
+  sortOrder    Int            @default(0) @map("sort_order")
+  createdAt    DateTime       @default(now()) @map("created_at")
+
+  // Relations
+  vehicles VehicleOption[]
+
+  @@index([manufacturer])
+  @@index([category])
+  @@index([manufacturer, category])
+  @@map("options")
+}
+
+/// 차량-옵션 연결 테이블 (N:M)
+model VehicleOption {
+  id        String   @id @default(uuid())
+  vehicleId String   @map("vehicle_id")
+  optionId  String   @map("option_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  option  Option  @relation(fields: [optionId], references: [id])
+
+  @@unique([vehicleId, optionId])
+  @@index([vehicleId])
+  @@index([optionId])
+  @@map("vehicle_options")
+}
+
+/// 정비 이력
+model MaintenanceRecord {
+  id            String   @id @default(uuid())
+  vehicleId     String   @map("vehicle_id")
+  serviceDate   DateTime @map("service_date") @db.Date
+  serviceCenter String   @map("service_center")
+  description   String   @db.Text
+  cost          Decimal? @db.Decimal(12, 0)
+  documentUrl   String?  @map("document_url") @db.Text
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@index([vehicleId])
+  @@index([serviceDate(sort: Desc)])
+  @@map("maintenance_records")
+}
+
+/// 소모품 상태 (1:1)
+model ConsumableStatus {
+  id                       String           @id @default(uuid())
+  vehicleId                String           @unique @map("vehicle_id")
+  // 타이어
+  tirePercentage           Int?             @map("tire_percentage")
+  tireReplacementDate      DateTime?        @map("tire_replacement_date") @db.Date
+  tireBrand                String?          @map("tire_brand")
+  tireModel                String?          @map("tire_model")
+  // 브레이크
+  brakePadThicknessMm      Decimal?         @map("brake_pad_thickness_mm") @db.Decimal(4, 1)
+  brakeDiskStatus          BrakeDiskStatus? @map("brake_disk_status")
+  brakePadReplacementDate  DateTime?        @map("brake_pad_replacement_date") @db.Date
+  // 엔진오일
+  engineOilReplacementDate DateTime?        @map("engine_oil_replacement_date") @db.Date
+  engineOilMileageKm       Int?             @map("engine_oil_mileage_km")
+  engineOilBrand           String?          @map("engine_oil_brand")
+  // 기타
+  batteryReplacementDate   DateTime?        @map("battery_replacement_date") @db.Date
+  coolantReplacementDate   DateTime?        @map("coolant_replacement_date") @db.Date
+  notes                    String?          @db.Text
+  createdAt                DateTime         @default(now()) @map("created_at")
+  updatedAt                DateTime         @updatedAt @map("updated_at")
+
+  // Relations
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@map("consumable_status")
+}
+
+/// 미디어 파일
+model MediaFile {
+  id               String   @id @default(uuid())
+  vehicleId        String   @map("vehicle_id")
+  fileType         FileType @map("file_type")
+  originalFilename String   @map("original_filename")
+  s3Key            String   @map("s3_key") @db.Text
+  cdnUrl           String   @map("cdn_url") @db.Text
+  fileSizeBytes    BigInt   @map("file_size_bytes")
+  mimeType         String   @map("mime_type")
+  width            Int?
+  height           Int?
+  duration         Int?     // 영상/오디오 길이 (초)
+  displayOrder     Int      @default(0) @map("display_order")
+  isMain           Boolean  @default(false) @map("is_main") // 대표 이미지
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  // Relations
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@index([vehicleId])
+  @@index([vehicleId, displayOrder])
+  @@index([vehicleId, fileType])
+  @@map("media_files")
+}
+
+/// 검수 리포트 (P1)
+model InspectionReport {
+  id            String          @id @default(uuid())
+  vehicleId     String          @unique @map("vehicle_id")
+  inspectorId   String          @map("inspector_id")
+  overallGrade  InspectionGrade @map("overall_grade")
+  overallScore  Int             @map("overall_score")
+  // 카테고리별 점수
+  exteriorScore Int?            @map("exterior_score")
+  interiorScore Int?            @map("interior_score")
+  engineScore   Int?            @map("engine_score")
+  chassisScore  Int?            @map("chassis_score")
+  // 상세 데이터
+  checklistData Json            @map("checklist_data") // 120가지 항목
+  damageData    Json?           @map("damage_data") // 손상 부위 좌표
+  notes         String?         @db.Text
+  inspectedAt   DateTime        @map("inspected_at")
+  createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
+
+  // Relations
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  inspector User    @relation("InspectorReports", fields: [inspectorId], references: [id])
+
+  @@map("inspection_reports")
+}
+
+// ============================================
+// FUTURE MODELS (P2)
+// ============================================
+
+/// 오퍼 (P2 - 실시간 오퍼 시스템)
+// model Offer {
+//   id          String   @id @default(uuid())
+//   vehicleId   String   @map("vehicle_id")
+//   buyerId     String   @map("buyer_id")
+//   offerAmount Decimal  @map("offer_amount") @db.Decimal(15, 0)
+//   currency    String   @default("KRW")
+//   status      String   // PENDING, ACCEPTED, REJECTED, COUNTER
+//   message     String?  @db.Text
+//   expiresAt   DateTime @map("expires_at")
+//   createdAt   DateTime @default(now()) @map("created_at")
+//   updatedAt   DateTime @updatedAt @map("updated_at")
+// }
+
+/// 채팅 메시지 (P2)
+// model ChatMessage {
+//   id         String   @id @default(uuid())
+//   offerId    String   @map("offer_id")
+//   senderId   String   @map("sender_id")
+//   message    String   @db.Text
+//   isRead     Boolean  @default(false) @map("is_read")
+//   createdAt  DateTime @default(now()) @map("created_at")
+// }
+
+/// 화상 검수 예약 (P2)
+// model InspectionBooking {
+//   id          String   @id @default(uuid())
+//   vehicleId   String   @map("vehicle_id")
+//   buyerId     String   @map("buyer_id")
+//   scheduledAt DateTime @map("scheduled_at")
+//   timezone    String
+//   status      String   // SCHEDULED, COMPLETED, CANCELLED
+//   meetingUrl  String?  @map("meeting_url")
+//   createdAt   DateTime @default(now()) @map("created_at")
+// }
